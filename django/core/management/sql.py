@@ -40,6 +40,19 @@ def sql_create(app, style, connection):
         # Keep track of the fact that we've created the table for this model.
         known_models.add(model)
 
+    # Execute model hooks if theese exists
+    # `get_post_sync_sql` must be decorated with @classmethod decorator
+    models_with_hooks = filter(lambda model: "get_post_sync_sql" in model.__dict__, app_models)
+
+    for model in models_with_hooks:
+        try:
+            sql = model.get_post_sync_sql(connection)
+        except NotImplementedError:
+            continue
+
+        if sql:
+            final_output.extend(sql)
+
     # Handle references to tables that are from other apps
     # but don't exist physically.
     not_installed_models = set(pending_references.keys())

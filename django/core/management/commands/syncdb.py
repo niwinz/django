@@ -68,6 +68,7 @@ class Command(NoArgsCommand):
                 if router.allow_syncdb(db, m)])
             for app in models.get_apps()
         ]
+
         def model_installed(model):
             opts = model._meta
             converter = connection.introspection.table_name_converter
@@ -156,6 +157,39 @@ class Command(NoArgsCommand):
                             transaction.rollback_unless_managed(using=db)
                         else:
                             transaction.commit_unless_managed(using=db)
+
+        # Execute model hooks if theese exists
+        # `get_post_sync_sql` must be decorated with @classmethod decorator
+        #
+        # Example:
+        #   class SomeModel(models.Model):
+        #       foo = models.CharField(max_length=100)
+        #
+        #       @classmethod
+        #       def get_post_sync_sql(cls, connection):
+        #           if connection.vendor != "postgresql":
+        #               raise NotImplementedError
+        #           return ["COMMENT ON TABLE fooapp_somemodel IS 'My sample table';"]
+
+        for app_name, model_list in manifest.items():
+            models_with_hooks = filter(lambda model: "get_post_sync_sql" in model.__dict__, app_models)
+
+            for model in models_with_hooks:
+                try:
+                    sql = model.get_post_sync_sql(connection)
+                except NotImplementedError:
+                    continue
+
+                if sql:
+                    try:
+                        for stmt in sql:
+                            cursor.execute(stmt)
+                    except Exception as e:
+                        self.stderr.write("Failed to install sql from %s.%s model hook: %s" % \
+                            (app_name, model._meta.object_name, e))
+                        transaction.rollback_unless_managed(using=db)
+                    else:
+                        transaction.commit_unless_managed(using=db)
 
         # Load initial_data fixtures (unless that has been disabled)
         if load_initial_data:
