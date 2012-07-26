@@ -61,6 +61,41 @@ class Command(NoArgsCommand):
         created_models = set()
         pending_references = {}
 
+        # Build pre and post app sql from app hooks
+        app_post_sync_sql = []
+
+
+        for app in models.get_apps():
+            app_name = app.__name__.split(".")[-2]
+
+            if "pre_sync" in app.__dict__:
+                try:
+                    sql = app.__dict__['pre_sync'](connection)
+                except NotImplementedError:
+                    continue
+
+                if verbosity >= 2:
+                    self.stdout.write("Installing custom SQL for %s app\n" % (app_name))
+                try:
+                    for stmt in sql:
+                        cursor.execute(sql)
+                except Exception as e:
+                    self.stderr.write("Failed to install custom SQL for %s app: %s\n" % \
+                                        (app_name, e))
+                    if show_traceback:
+                        traceback.print_exc()
+                    transaction.rollback_unless_managed(using=db)
+                else:
+                    transaction.commit_unless_managed(using=db)
+
+            if "post_sync" in app.__dict__:
+                try:
+                    sql = app.__dict__['post_sync'](connection)
+                except NotImplementedError:
+                    continue
+
+                app_post_sync_sql.append((app_name, sql))
+
         # Build the manifest of apps and models that are to be synchronized
         all_models = [
             (app.__name__.split('.')[-2],
@@ -172,7 +207,7 @@ class Command(NoArgsCommand):
         #           return ["COMMENT ON TABLE fooapp_somemodel IS 'My sample table';"]
 
         for app_name, model_list in manifest.items():
-            models_with_hooks = filter(lambda model: "get_post_sync_sql" in model.__dict__, app_models)
+            models_with_hooks = filter(lambda model: "get_post_sync_sql" in model.__dict__, model_list)
 
             for model in models_with_hooks:
                 try:
