@@ -38,7 +38,7 @@ def sql_create(app, style, connection):
         final_output.extend(project_pre_sync_sql)
 
     if app_pre_sync_sql:
-        for app_name, sql in app_pre_sync_sql:
+        for app_name, sql in app_pre_sync_sql.items():
             final_output.extend(sql)
 
     for model in app_models:
@@ -67,7 +67,7 @@ def sql_create(app, style, connection):
 
     # Get app level post_sync sql
     if app_post_sync_sql:
-        for app_name, sql in app_post_sync_sql:
+        for app_name, sql in app_post_sync_sql.items():
             final_output.extend(sql)
 
     # Get project level post_sync sql
@@ -209,7 +209,8 @@ def custom_sql_for_model(model, style, connection):
     return output
 
 
-def emit_post_sync_signal(created_models, verbosity, interactive, db):
+def emit_post_sync_signal(created_models, verbosity, interactive, db, type="sync"):
+    assert type in ["sync", "migrate", "flush"], 'type param must be one of: "sync", "migrate", "flush"'
     # Emit the post_sync signal for every application.
     for app in models.get_apps():
         app_name = app.__name__.split('.')[-2]
@@ -217,7 +218,19 @@ def emit_post_sync_signal(created_models, verbosity, interactive, db):
             print("Running post-sync handlers for application %s" % app_name)
         models.signals.post_syncdb.send(sender=app, app=app,
             created_models=created_models, verbosity=verbosity,
-            interactive=interactive, db=db)
+            interactive=interactive, db=db, type=type)
+
+
+def emit_pre_sync_signal(app, verbosity, interactive, db, type="sync"):
+    assert type in ["sync", "migrate", "flush"], 'type param must be one of: "sync", "migrate", "flush"'
+
+    app_name = app.__name__.split('.')[-2]
+    if verbosity >= 2:
+        print("Running pre-sync handlers for application %s" % app_name)
+
+    models.signals.pre_syncdb.send(sender=app, app=app,
+        verbosity=verbosity, interactive=interactive,
+        db=db, type=type)
 
 
 def get_project_hooks_sql(connection):
@@ -276,4 +289,4 @@ def get_apps_hooks_sql(connection):
 
             app_post_sync_sql.append((app_name, sql))
 
-    return app_pre_sync_sql, app_post_sync_sql
+    return dict(app_pre_sync_sql), dict(app_post_sync_sql)
