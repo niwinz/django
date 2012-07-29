@@ -25,9 +25,21 @@ def sql_create(app, style, connection):
     # we can be conservative).
     app_models = models.get_models(app, include_auto_created=True)
     final_output = []
+
     tables = connection.introspection.table_names()
     known_models = set([model for model in connection.introspection.installed_models(tables) if model not in app_models])
     pending_references = {}
+
+    project_pre_sync_sql, project_post_sync_sql = get_project_hooks_sql(connection)
+    app_pre_sync_sql, app_post_sync_sql = get_apps_hooks_sql(connection)
+
+    # Get project level pre_sync sql
+    if project_pre_sync_sql:
+        final_output.extend(project_pre_sync_sql)
+
+    if app_pre_sync_sql:
+        for app_name, sql in app_pre_sync_sql:
+            final_output.extend(sql)
 
     for model in app_models:
         output, references = connection.creation.sql_create_model(model, style, known_models)
@@ -52,6 +64,15 @@ def sql_create(app, style, connection):
 
         if sql:
             final_output.extend(sql)
+
+    # Get app level post_sync sql
+    if app_post_sync_sql:
+        for app_name, sql in app_post_sync_sql:
+            final_output.extend(sql)
+
+    # Get project level post_sync sql
+    if project_post_sync_sql:
+        final_output.extend(project_post_sync_sql)
 
     # Handle references to tables that are from other apps
     # but don't exist physically.
@@ -197,3 +218,62 @@ def emit_post_sync_signal(created_models, verbosity, interactive, db):
         models.signals.post_syncdb.send(sender=app, app=app,
             created_models=created_models, verbosity=verbosity,
             interactive=interactive, db=db)
+
+
+def get_project_hooks_sql(connection):
+    # Build project level pre and post hooks.
+    pre_sync_method_path = getattr(settings, 'PROJECT_PRE_SYNCDB_HOOK', None)
+    post_sync_method_path = getattr(settings, 'PROJECT_POST_SYNCDB_HOOK', None)
+    pre_sync_method = post_sync_method = None
+
+    pre_sync_sql, post_sync_sql = [], []
+
+    if pre_sync_method_path is not None:
+        try:
+            mod_path, method_name = pre_sync_method_path.rsplit('.', 1)
+            mod = importlib.import_module(mod_path)
+            pre_sync_method = getattr(mod, method_name)
+        except (AttributeError, ImportError) as e:
+            pass
+
+    if post_sync_method_path is not None:
+        try:
+            mod_path, method_name = pre_sync_method_path.rsplit('.', 1)
+            mod = importlib.import_module(mod_path)
+            post_sync_method = getattr(mod, method_name)
+        except (AttributeError, ImportError) as e:
+            pass
+
+    if pre_sync_method:
+        pre_sync_sql = pre_sync_method(connection)
+
+    if post_sync_method:
+        post_sync_sql = post_sync_method(connection)
+
+    return pre_sync_sql, post_sync_sql
+
+
+def get_apps_hooks_sql(connection):
+    app_pre_sync_sql = []
+    app_post_sync_sql = []
+
+    for app in models.get_apps():
+        app_name = app.__name__.split(".")[-2]
+
+        if "pre_sync" in app.__dict__:
+            try:
+                sql = app.__dict__['pre_sync'](connection)
+            except NotImplementedError:
+                continue
+
+            app_pre_sync_sql.append((app_name, sql))
+
+        if "post_sync" in app.__dict__:
+            try:
+                sql = app.__dict__['post_sync'](connection)
+            except NotImplementedError:
+                continue
+
+            app_post_sync_sql.append((app_name, sql))
+
+    return app_pre_sync_sql, app_post_sync_sql

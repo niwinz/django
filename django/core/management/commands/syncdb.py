@@ -5,7 +5,8 @@ from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import NoArgsCommand
 from django.core.management.color import no_style
-from django.core.management.sql import custom_sql_for_model, emit_post_sync_signal
+from django.core.management.sql import custom_sql_for_model, emit_post_sync_signal, \
+    get_project_hooks_sql, get_apps_hooks_sql
 from django.db import connections, router, transaction, models, DEFAULT_DB_ALIAS
 from django.utils.datastructures import SortedDict
 from django.utils.importlib import import_module
@@ -23,8 +24,9 @@ class Command(NoArgsCommand):
     )
     help = "Create the database tables for all apps in INSTALLED_APPS whose tables haven't already been created."
 
-    def handle_noargs(self, **options):
 
+
+    def handle_noargs(self, **options):
         verbosity = int(options.get('verbosity'))
         interactive = options.get('interactive')
         show_traceback = options.get('traceback')
@@ -61,40 +63,46 @@ class Command(NoArgsCommand):
         created_models = set()
         pending_references = {}
 
+
+        # Obtain and install projec level pre_sync raw sql.
+        # TODO: pre_sync signal for project
+
+        project_pre_sync_sql, project_post_sync_sql = get_project_hooks_sql(connection)
+
+        if project_pre_sync_sql:
+            try:
+                for stmt in project_pre_sync_sql:
+                    cursor.execute(stmt)
+
+            except Exception as e:
+                self.stderr.write("Failed to install project level custom SQL: %s\n" % (e))
+                if show_traceback:
+                    traceback.print_exc()
+                transaction.rollback_unless_managed(using=db)
+            else:
+                transaction.commit_unless_managed(using=db)
+
         # Build pre and post app sql from app hooks
-        app_post_sync_sql = []
+        # TODO: pre/post_sync singnal for apps
+        app_pre_sync_sql, app_post_sync_sql = get_apps_hooks_sql(connection)
 
+        for app_name, sql in app_pre_sync_sql:
+            if not sql:
+                continue
 
-        for app in models.get_apps():
-            app_name = app.__name__.split(".")[-2]
-
-            if "pre_sync" in app.__dict__:
-                try:
-                    sql = app.__dict__['pre_sync'](connection)
-                except NotImplementedError:
-                    continue
-
-                if verbosity >= 2:
-                    self.stdout.write("Installing custom SQL for %s app\n" % (app_name))
-                try:
-                    for stmt in sql:
-                        cursor.execute(sql)
-                except Exception as e:
-                    self.stderr.write("Failed to install custom SQL for %s app: %s\n" % \
-                                        (app_name, e))
-                    if show_traceback:
-                        traceback.print_exc()
-                    transaction.rollback_unless_managed(using=db)
-                else:
-                    transaction.commit_unless_managed(using=db)
-
-            if "post_sync" in app.__dict__:
-                try:
-                    sql = app.__dict__['post_sync'](connection)
-                except NotImplementedError:
-                    continue
-
-                app_post_sync_sql.append((app_name, sql))
+            if verbosity >= 2:
+                self.stdout.write("Installing custom SQL for %s app\n" % (app_name))
+            try:
+                for stmt in sql:
+                    cursor.execute(stmt)
+            except Exception as e:
+                self.stderr.write("Failed to install custom SQL for %s app: %s\n" % \
+                                    (app_name, e))
+                if show_traceback:
+                    traceback.print_exc()
+                transaction.rollback_unless_managed(using=db)
+            else:
+                transaction.commit_unless_managed(using=db)
 
         # Build the manifest of apps and models that are to be synchronized
         all_models = [
@@ -136,7 +144,6 @@ class Command(NoArgsCommand):
                 for statement in sql:
                     cursor.execute(statement)
                 tables.append(connection.introspection.table_name_converter(model._meta.db_table))
-
 
         transaction.commit_unless_managed(using=db)
 
@@ -210,6 +217,10 @@ class Command(NoArgsCommand):
             models_with_hooks = filter(lambda model: "get_post_sync_sql" in model.__dict__, model_list)
 
             for model in models_with_hooks:
+                # Only execute sql for just created models.
+                if model not in created_models:
+                    continue
+
                 try:
                     sql = model.get_post_sync_sql(connection)
                 except NotImplementedError:
@@ -225,6 +236,43 @@ class Command(NoArgsCommand):
                         transaction.rollback_unless_managed(using=db)
                     else:
                         transaction.commit_unless_managed(using=db)
+
+        # post_sync for apps.
+        for app_name, sql in app_post_sync_sql:
+            if not sql:
+                continue
+
+            if verbosity > 1:
+                sys.stdout.write("Installing app %s post sync sql\n" % (app_name))
+
+            try:
+                for stmt in sql:
+                    cursor.execute(stmt)
+
+            except Exception as e:
+                self.stderr.write("Failed to install custom SQL for %s app: %s\n" % \
+                                    (app_name, e))
+                if show_traceback:
+                    traceback.print_exc()
+                transaction.rollback_unless_managed(using=db)
+            else:
+                transaction.commit_unless_managed(using=db)
+
+        # Obtain and install projec level post_sync raw sql.
+        # TODO: pre_sync signal for project
+
+        if project_post_sync_sql:
+            try:
+                for stmt in project_post_sync_sql:
+                    cursor.execute(stmt)
+
+            except Exception as e:
+                self.stderr.write("Failed to install project level custom SQL: %s\n" % (e))
+                if show_traceback:
+                    traceback.print_exc()
+                transaction.rollback_unless_managed(using=db)
+            else:
+                transaction.commit_unless_managed(using=db)
 
         # Load initial_data fixtures (unless that has been disabled)
         if load_initial_data:
