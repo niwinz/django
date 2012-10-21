@@ -57,4 +57,5 @@ class SessionStore(DBStore):
         """
         self.clear()
         self.delete(self.session_key)
+        self._session_key = None
         self.create()

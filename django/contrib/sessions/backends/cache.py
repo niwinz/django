@@ -36,10 +36,11 @@ class SessionStore(SessionBase):
         # and then raise an exception. That's the risk you shoulder if using
         # cache backing.
         for i in xrange(10000):
-            self._session_key = self._get_new_session_key()
+            self._session_key = self._get_or_create_session_key()
             try:
                 self.save(must_create=True)
             except CreateError:
+                self._session_key = None
                 continue
             self.modified = True
             return

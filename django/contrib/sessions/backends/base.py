@@ -233,6 +233,8 @@ class SessionBase(object):
         """
         self.clear()
         self.delete()
+        # Set None to _session_key for backward compatibility
+        self._session_key = None
         self.create()
 
     def cycle_key(self):
@@ -240,7 +242,7 @@ class SessionBase(object):
         Creates a new session key, whilst retaining the current session data.
         """
         data = self._session_cache
-        key = self.session_key
+        key, self._session_key = self.session_key, None
         self.create()
         self._session_cache = data
         self.delete(key)
