@@ -42,6 +42,21 @@ class SessionTestsMixin(object):
         self.assertFalse(self.session.modified)
         self.assertFalse(self.session.accessed)
 
+    def test_new_session_with_key_01(self):
+        session = self.backend("4cb6e3c17c76267345ce42d4280ef7d9")
+        session["foo"] = 1
+        session.save()
+        self.assertEqual(session.session_key, "4cb6e3c17c76267345ce42d4280ef7d9")
+
+    def test_new_session_with_key_02(self):
+        session = self.backend()
+        session["foo"] = 1
+        session.save()
+
+        session2 = self.backend(session.session_key)
+        self.assertEqual(session2.session_key, session.session_key)
+        self.assertIn("foo", session2)
+
     def test_get_empty(self):
         self.assertEqual(self.session.get('cat'), None)
 
