@@ -699,9 +699,8 @@ def templatize(src, origin=None):
                     out.write(blankout(t.contents, 'B'))
             elif t.token_type == TOKEN_VAR:
                 parts = t.contents.split('|')
-                cmatch = constant_re.match(parts[0])
-                if cmatch:
-                    out.write(' _(%s) ' % cmatch.group(1))
+                for m in constant_re.findall(parts[0]):
+                    out.write(' _(%s) ' % m)
                 for p in parts[1:]:
                     if p.find(':_(') >= 0:
                         out.write(' %s ' % p.split(':', 1)[1])
